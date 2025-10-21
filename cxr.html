@@ -1,50 +1,10 @@
-from flask import Flask, request, jsonify, render_template_string
-import google.generativeai as genai
-import json
-import re
-
-app = Flask(__name__)
-
-GOOGLE_API_KEY = "AIzaSyAa5CxOhXxzT7Ye2kE_a1K5vp-hd5EJ6f4"
-GUIDE_URL = "https://docs.google.com/document/d/1QLumD13Xp71w1r_T8jLhaBveS20qGMTItfhFhPBsdWw/edit?usp=sharing"
-
-genai.configure(api_key=GOOGLE_API_KEY)
-model = genai.GenerativeModel('gemini-pro')
-
-def analyze_and_correct_code(code, language):
-    prompt = f"""You are an expert in all programming languages and code analysis. Please analyze the following code, which is written in {language} and then correct it, if there is any errors, and add a comment in the corrected code of what you corrected. If the code is syntactically correct, then provide sample execution output without any other details.
-       Code:
-       {code}
-        """
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"Error: {e}"
-
-
-def generate_code(comment, language):
-    prompt = f"Convert the following comment to {language} code, providing only essential comments. Remove all the non essential comments and also remove all markdown code block indicators: {comment}"
-    try:
-        response = model.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"Error: {e}"
-def get_file_extension(language):
-     prompt = f"What is the correct file extension for the programming language {language}? Just return the file extension and nothing else."
-     try:
-         response = model.generate_content(prompt)
-         return response.text.strip()
-     except Exception as e:
-        return f"Error: {e}"
-
-html_template = """
 <!DOCTYPE html>
 <html lang="en" class="dark-theme">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>CXR</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/default.min.css">
     <style>
         body {
             font-family: sans-serif;
@@ -118,7 +78,18 @@ html_template = """
            background-color: #252525;
             color: #d4d4d4;
             transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+             height: 400px;
+             overflow-y: auto; /* Add scroll if necessary */
         }
+          pre {
+          margin: 0;
+             height: 100%;
+              display: flex;
+         }
+         code {
+           display: block;
+              height: 100%;
+         }
         .light-theme .code-area {
            background-color: #f0f0f0;
             color: black;
@@ -321,13 +292,21 @@ html_template = """
             text-decoration: none;
             cursor: pointer;
         }
+         #error-message{
+             color: red;
+              margin-top: 10px;
+              padding: 10px;
+              border: 1px solid red;
+              border-radius: 5px;
+             display: none;
+           }
     </style>
 </head>
 <body>
     <header>
         <h1>CXR</h1>
           <div>
-           <select id="languageSelect">
+           <select id="languageSelect" title="Select a language">
                   </select>
              <button id ="themeButton">Theme</button>
         </div>
@@ -340,7 +319,8 @@ html_template = """
         </div>
         <div class="generated-code">
             <label for="generatedCode">Output :</label>
-            <textarea id="generatedCode" class="code-area" readonly></textarea>
+            <pre><code id="generatedCode" class="code-area"></code></pre>
+               <div id="error-message"></div>
               <div id ="footer-buttons">
                 <button id="downloadButton">Download</button>
                 <button id="clearButton">Clear</button>
@@ -358,137 +338,179 @@ html_template = """
     </div>
     <footer>
     </footer>
+     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script>
-      document.addEventListener('DOMContentLoaded', () => {
-          const languageSelect = document.getElementById('languageSelect');
-          const codeInput = document.getElementById('codeInput');
-          const generatedCode = document.getElementById('generatedCode');
-          const clearButton = document.getElementById('clearButton');
-          const downloadButton = document.getElementById('downloadButton');
-           const guideButton = document.getElementById('guideButton');
-          const runButton = document.getElementById('runButton');
+         document.addEventListener('DOMContentLoaded', () => {
+             const languageSelect = document.getElementById('languageSelect');
+            const codeInput = document.getElementById('codeInput');
+            const generatedCode = document.getElementById('generatedCode');
+            const clearButton = document.getElementById('clearButton');
+            const downloadButton = document.getElementById('downloadButton');
+            const guideButton = document.getElementById('guideButton');
+            const runButton = document.getElementById('runButton');
             const footerButtons = document.getElementById('footer-buttons');
-             const themeButton = document.getElementById('themeButton');
+            const themeButton = document.getElementById('themeButton');
             const body = document.body;
+            const errorMessageDiv = document.getElementById('error-message');
+            const customLangModal = document.getElementById('customLangModal');
+            const customLangInput = document.getElementById('customLangInput');
+            const customLangSubmit = document.getElementById('customLangSubmit');
+            const modalCloseButton = document.querySelector('.close');
+            let currentLanguage = 'python';
 
-          const customLangModal = document.getElementById('customLangModal');
-         const customLangInput = document.getElementById('customLangInput');
-         const customLangSubmit = document.getElementById('customLangSubmit');
-         const modalCloseButton = document.querySelector('.close');
-          let currentLanguage = 'python';
 
-
-          const languages = ["python", "javascript", "java", "c++", "csharp", "c", "go", "rust", "ruby", "r", "kotlin", "mysql", "other"];
-           languages.forEach(lang => {
+            const languages = ["python", "javascript", "java", "c++", "csharp", "c", "go", "rust", "ruby", "r", "kotlin", "mysql", "other"];
+             languages.forEach(lang => {
                const option = document.createElement('option');
               option.value = lang;
               option.text = lang;
               languageSelect.appendChild(option);
              });
-          languageSelect.value = 'python';
+            languageSelect.value = 'python';
+             let isDarkTheme = true;
 
-         let isDarkTheme = true;
-
-           themeButton.addEventListener('click', () => {
+            themeButton.addEventListener('click', () => {
                 isDarkTheme = !isDarkTheme;
-              if(isDarkTheme){
-                  body.classList.add('dark-theme');
-                  body.classList.remove('light-theme');
-               }
-              else{
-                   body.classList.add('light-theme');
-                   body.classList.remove('dark-theme');
-               }
+                if (isDarkTheme) {
+                    body.classList.add('dark-theme');
+                    body.classList.remove('light-theme');
+                }
+                else {
+                    body.classList.add('light-theme');
+                    body.classList.remove('dark-theme');
+                }
+            });
+            languageSelect.addEventListener('change', (event) => {
+                if (event.target.value === 'other') {
+                    customLangModal.style.display = "block";
+                }
+                else {
+                    currentLanguage = event.target.value;
+                }
+            });
+             customLangSubmit.addEventListener('click', () => {
+                currentLanguage = customLangInput.value;
+                 customLangModal.style.display = "none";
            });
-         languageSelect.addEventListener('change', (event) =>{
-            if(event.target.value === 'other'){
-                customLangModal.style.display = "block";
-            }
-           else {
-                 currentLanguage = event.target.value;
-            }
-        });
-        customLangSubmit.addEventListener('click', () =>{
-            currentLanguage = customLangInput.value;
-             customLangModal.style.display = "none";
-        })
-         modalCloseButton.addEventListener('click', () => {
-                customLangModal.style.display = "none";
+            modalCloseButton.addEventListener('click', () => {
+               customLangModal.style.display = "none";
+           });
+            window.addEventListener('click', (event) => {
+               if (event.target === customLangModal) {
+                    customLangModal.style.display = "none";
+              }
             });
 
-         window.addEventListener('click', (event) => {
-                if (event.target === customLangModal) {
-                    customLangModal.style.display = "none";
-                }
-        });
+            // START OF GEMINI CLIENT-SIDE INTEGRATION - REPLACE THE PLACEHOLDERS
+              const GOOGLE_API_KEY = "AIzaSyBEKTTtyQ8hu1aEzb12fch0rid5kape9HE"; // ***VERY INSECURE - DO NOT DO THIS IN PRODUCTION***
+              const MODEL_NAME = 'gemini-pro';
+            async function callGeminiAPI(code, language, isComment = false) {
+                console.log("callGeminiAPI called")
+                 const genAI =  window.google.generativeai;
+                genAI.configure({ apiKey: GOOGLE_API_KEY});
+                 const model = genAI.GenerativeModel({ model: MODEL_NAME });
 
-
-          runButton.addEventListener('click', async () => {
-              const code = codeInput.value.trim();
-              if (!code) {
-                   generatedCode.value = ""
-                   return;
+                  let prompt = null;
+                 if(isComment){
+                     console.log("Generating code using Gemini comment")
+                    prompt = `Convert the following comment to ${language} code, providing only essential comments. Remove all the non-essential comments and also remove all markdown code block indicators. Return the code in plain text.
+                            Comment: ${code}`
                 }
-              try {
-                 let data = null;
-                 if (code.startsWith('//')){
-                   const response = await fetch('/generate', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ code: code, language: currentLanguage}),
-                   });
-                  if (!response.ok) {
-                     const errorData = await response.json();
-                       throw new Error(`API Error: ${response.status} - ${errorData.error || 'Unknown error'}`);
-                  }
-                   data = await response.json();
-                   if(data) {
-                      if (data.generatedCode) {
-                          generatedCode.value = data.generatedCode;
-                        }
-                    }
-                 }
-                 else{
-                      const response = await fetch('/analyze', {
-                       method: 'POST',
-                       headers: { 'Content-Type': 'application/json' },
-                       body: JSON.stringify({ code: code, language: currentLanguage}),
-                     });
-                     if (!response.ok) {
-                         const errorData = await response.json();
-                         throw new Error(`API Error: ${response.status} - ${errorData.error || 'Unknown error'}`);
-                     }
-                     data = await response.json()
-                     try{
-                         const parsedData = JSON.parse(data.generatedCode);
-                          if (parsedData.message){
-                            generatedCode.value = parsedData.message + "\\n" + (parsedData.output || "");
-                         }
-                         else{
-                             generatedCode.value = parsedData.code
-                         }
+                else{
+                      console.log("Analyzing code using Gemini")
+                    prompt = `You are an expert in all programming languages and code analysis.
+                            Please analyze the following code, which is written in ${language} and then correct it, if there is any errors.
+                            Add a comment in the corrected code about what you corrected. If the code is syntactically correct, then provide sample execution output without any other details.
+                            Return the corrected code or sample output in JSON format with the key as 'code' or 'message' and in case of the sample output add a key 'output'.
+                            Code:
+                            ${code}`
+                }
+                try {
+                    console.log("Calling Gemini API")
+                     const result = await model.generateContent(prompt);
+                      console.log("Result from gemini " , result)
+                    const response = await result.response;
+                     console.log("Response from Gemini: ", response);
+                     let data = null;
+                    try{
+                       console.log("Trying to parse response as JSON: ", response.text());
+                       data = JSON.parse(response.text());
+                      console.log("Parsed JSON data is: ", data);
                     }
                     catch(e){
-                         generatedCode.value = data.generatedCode;
+                       console.log("Error parsing JSON data", e);
+                         data = {code : response.text()}
                     }
+                   return data
+                }
+                  catch (error) {
+                      console.log("There is error in callGeminiAPI function" , error)
+                       throw new Error(`API Error: ${error.message}`);
+                   }
+            }
+
+           runButton.addEventListener('click', async () => {
+                const code = codeInput.value.trim();
+                  console.log("Run button is clicked")
+                 if (!code) {
+                      console.log("Code input box is empty")
+                      generatedCode.textContent = "";
+                      errorMessageDiv.style.display = 'none';
+                      return;
+                  }
+                 console.log("Input code is ", code)
+                 try {
+                     errorMessageDiv.style.display = 'none';
+                      let result = null;
+                    let isComment = false;
+                     if (code.startsWith('//')) {
+                         isComment = true;
+                         console.log("Input starts with //, calling comment processing logic")
+
+                     }
+                      result = await callGeminiAPI(code, currentLanguage, isComment);
+
+                    console.log("result is ",result)
+                      console.log("Result received from callGeminiAPI", result);
+                      if(result){
+                       if (result.code) {
+                             generatedCode.innerHTML = `<pre><code class="language-${currentLanguage}">${result.code}</code></pre>`;
+                             hljs.highlightAll();
+                            console.log("code is", generatedCode.innerHTML)
+                       }
+                     else if (result.message){
+                         let content = result.message;
+                          if (result.output) {
+                            content = content + "\n" + result.output
+                           }
+                           generatedCode.innerHTML = `<pre><code class="language-text">${content}</code></pre>`;
+                           hljs.highlightAll();
+                             console.log("message is", generatedCode.innerHTML)
+                        }
+                     } else {
+                      generatedCode.innerHTML = "<pre><code>No output generated</code></pre>";
+                       hljs.highlightAll();
+                         console.log("No output was generated")
+                     }
                  }
+                 catch (error) {
+                      console.log("There was an error" , error)
+                    errorMessageDiv.textContent = `Error: ${error.message}`;
+                     errorMessageDiv.style.display = 'block';
+                 }
+           });
 
 
-              } catch (error) {
-                generatedCode.value = `Error: ${error.message}`;
-               }
-          });
-
-
-          clearButton.addEventListener('click', () => {
-              codeInput.value = '';
-              generatedCode.value = '';
-          });
+            clearButton.addEventListener('click', () => {
+                codeInput.value = '';
+                 generatedCode.innerHTML = '';
+                errorMessageDiv.style.display = 'none';
+           });
             downloadButton.addEventListener('click', async () => {
-                const code = generatedCode.value;
+               const code = generatedCode.textContent;
                let fileExtension = '';
-               if(currentLanguage !== "other") {
-                   if(currentLanguage === 'python') {
+                if(currentLanguage !== "other") {
+                  if(currentLanguage === 'python') {
                       fileExtension = "py"
                      } else if (currentLanguage === 'javascript'){
                        fileExtension = "js"
@@ -513,7 +535,7 @@ html_template = """
                      else if (currentLanguage === 'ruby'){
                       fileExtension = 'rb'
                     }
-                    else if (currentLanguage === 'SQL' || currentLanguage === 'mysql'){
+                     else if (currentLanguage === 'SQL' || currentLanguage === 'mysql'){
                       fileExtension = 'sql'
                     }
                     else if (currentLanguage === 'kotlin'){
@@ -522,54 +544,23 @@ html_template = """
                      else if (currentLanguage === 'r'){
                        fileExtension = 'r'
                     }
-                }
-               else{
-                fileExtension = await get_file_extension(currentLanguage);
-                }
+               }
+              else{
+                  fileExtension = "txt";
+               }
 
                 const fileName = `project.${fileExtension}`;
-                const blob = new Blob([code], { type: "text/plain" });
+                 const blob = new Blob([code], { type: "text/plain" });
                  const a = document.createElement('a');
-               a.href = URL.createObjectURL(blob);
+                 a.href = URL.createObjectURL(blob);
                 a.download = fileName;
                  a.click();
-            });
-        guideButton.addEventListener('click', () => {
-            window.open('""" + GUIDE_URL + """', '_blank');
+           });
+           guideButton.addEventListener('click', () => {
+                window.open('https://docs.google.com/document/d/1QLumD13Xp71w1r_T8jLhaBveS20qGMTItfhFhPBsdWw/edit?usp=sharing', '_blank');
+             });
         });
-      });
     </script>
+     <script src="https://esm.run/google-generative-ai"></script>
 </body>
 </html>
-   """
-
-@app.route('/', methods=['GET'])
-def index():
-    return render_template_string(html_template)
-
-@app.route('/generate', methods=['POST'])
-def generate():
-    data = request.get_json()
-    comment = data.get('code')
-    language = data.get('language')
-
-    if not comment or not language:
-        return jsonify({'error': 'Code and language are required'}), 400
-
-    output = generate_code(comment, language)
-    return jsonify({'generatedCode': output})
-
-@app.route('/analyze', methods=['POST'])
-def analyze():
-    data = request.get_json()
-    code = data.get('code')
-    language = data.get('language')
-
-    if not code or not language:
-        return jsonify({'error': 'Code and language are required'}), 400
-    output = analyze_and_correct_code(code, language)
-    return jsonify({'generatedCode': output})
-
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5001)
